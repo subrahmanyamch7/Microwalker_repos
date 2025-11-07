@@ -8,28 +8,9 @@
 // - may need a better way to toggle the enable pin on all 6 drivers
 // - there is no hard zero option as I got rid of typ
 #include <AD9850.h>
-#include <Wire.h>
-#include "Adafruit_ADS1X15.h"
 #include "SerialTransfer.h"
-
-
-Adafruit_ADS1115 ads;  // Create ADS1115 object
-
 SerialTransfer myTransfer;
-
-
-float action[10]; //an array to store incoming data from python
-
-
-//Store data from arduino to send to python
-struct send_class {
-  float Bx_sensor;
-  float By_sensor;
-  float Bz_sensor;
-
-} send_data;
-
-
+float action[9]; //an array to store incoming data from python
 
 #define PI 3.1415926535897932384626433832795
 
@@ -44,8 +25,10 @@ float psi;
 float gradient_status;
 float equal_field_status;
 float acoustic_frequency;
-float null;
 
+float T_switch;
+float phase_switch;
+float t2;
 
 
 
@@ -77,6 +60,9 @@ float omega;
 float Bx_final;
 float By_final;
 float Bz_final;
+
+float z0;
+float x0;
 
 
 
@@ -128,26 +114,19 @@ const int RESET_PIN = 40;
   
 void setup()
 {
-
+  DDS.begin(W_CLK_PIN, FQ_UD_PIN, DATA_PIN, RESET_PIN);
+  DDS.calibrate(124999500);
 
   cli();
-  //TCCR0B = (TCCR0B & 0b11111000) | 0x01; //7.81250[kHz] pin 13,4  62.5[kHz]  dont change this one actually. its too complicated to try and compensate the millis and micros functions.
+  TCCR0B = (TCCR0B & 0b11111000) | 0x02; //7.81250[kHz] pin 13,4
   TCCR1B = (TCCR1B & 0b11111000) | 0x01; //31.37255 [kHz] pin 12,11
   TCCR2B = (TCCR2B & 0b11111000) | 0x01; //31.37255 [kHz] pin 10,9
   TCCR3B = (TCCR3B & 0b11111000) | 0x01; //31.37255 [kHz] pin 5,3,2
   TCCR4B = (TCCR4B & 0b11111000) | 0x01; //31.37255 [kHz] pin 8,7,6 
-  TCCR5B = (TCCR5B & 0b11111000) | 0x01; //31.37255 [kHz] pin 44,45,46 
   sei();
   
   Serial.begin(115200);
   myTransfer.begin(Serial);
-
-    //start acoustic module
-  DDS.begin(W_CLK_PIN, FQ_UD_PIN, DATA_PIN, RESET_PIN);
-  DDS.calibrate(124999500);
-
-  //start ads1115 module
-  ads.begin();  // Start I2C and ADS1115
 
 
    //Coil1 Ouptut
@@ -338,7 +317,9 @@ void set6(float DC6){
     analogWrite(Coil6_PWML,0);
 
   }
+  
  
+
 }
 
 
@@ -349,12 +330,10 @@ void set6(float DC6){
 
 void loop()
 {
-    if  (myTransfer.available()){ 
+    if  (myTransfer.available()){ // THIS IF STATEMENT MIGHT MESS UP EVERYTHING BELOW
       
               uint16_t message = 0;
-              message = myTransfer.rxObj(action,message);  
-
-
+              message = myTransfer.rxObj(action,message);               
     }
 
    
@@ -366,12 +345,9 @@ void loop()
    gamma = action[4];
    rolling_frequency = action[5]; 
    psi = action[6]; 
-   acoustic_frequency = action[7];
-   gradient_status = action[8];
-   equal_field_status = action[9];
-   null =action[10];
-
-   
+   gradient_status = action[7];
+   equal_field_status = action[8];
+   acoustic_frequency = action[9];
    
 
    if (acoustic_frequency != 0){
@@ -384,9 +360,8 @@ void loop()
    
    omega = 2*PI*rolling_frequency;
    
-
- 
-   t = micros() / 1e6;
+   tim = micros() % 7812500;
+   t = tim / 7812500;
    
    if (omega == 0){
        Bx_roll = 0;
@@ -394,11 +369,31 @@ void loop()
        Bz_roll = 0;
       }
    else {
-      //correct equations 7/8/23 //have to flip the sign of omega to maintain right handed chirality
-      Bx_roll = (-sin(alpha) * sin(-omega*t)) + (-cos(alpha) * cos(gamma)  * cos(-omega*t)); 
-      By_roll =  (cos(alpha) * sin(-omega*t)) + (-sin(alpha) * cos(gamma) *  cos(-omega*t)); 
-      Bz_roll = sin(gamma) * cos(-omega*t);
+      
+            T_switch = 1/(4*omega/(2*PI));
 
+      phase_switch = (sin(2*PI*t/T_switch )>= 0)? 1 : -1;
+      float modTime = fmod(t,T_switch);
+      t2 = abs(modTime  - T_switch/2)*2;
+      //if (sin(2*PI*omega*t/T_switch) < 0 ){
+         // phase_switch = -1;
+
+        // }
+      //else{
+       // phase_switch =1;
+       // }
+      //t2 = phase_switch*t;
+
+      
+            // (takes a vector ((1-x0)*sin(wt)+x0, cos(wt), z0) and rotates it in 3D)
+      z0 = 1;
+      x0 = 0;
+      Bx_roll = (-sin(alpha+(PI/2)*sin(omega*t2)) * (x0 + (1-x0)*sin(omega*t2))) + (-cos(alpha+(PI/2)*sin(omega*t2)) * cos(gamma)  * cos(omega*t2)) + z0*cos(alpha+(PI/2)*sin(omega*t2))*sin(gamma); 
+      By_roll =  (cos(alpha+(PI/2)*sin(omega*t2)) * (x0 + (1-x0)*sin(omega*t2))) + (-sin(alpha+(PI/2)*sin(omega*t2)) * cos(gamma) *  cos(omega*t2)) + z0*sin(alpha+(PI/2)*sin(omega*t2))*sin(gamma); 
+      Bz_roll = sin(gamma) * cos(omega*t2) + z0*cos(gamma);
+
+            
+      
        // condition for perpendicular field (psi cannot be 90)
        // condition for perpendicular field (psi cannot be 90)
       if (psi < PI/2){
@@ -456,11 +451,11 @@ void loop()
   // if gradient status = 1: output the the corresponding gradient field
    if (gradient_status != 0){
       //y gradient
-      if (By_final < 0){
+      if (By_final > 0){
         set1(By_final);
         
       }
-      else if (By_final > 0){
+      else if (By_final < 0){
         set3(By_final);
       }
       else{ //if By==0
@@ -502,11 +497,6 @@ void loop()
       set5(Bz_final);
       set6(-Bz_final);
    }
-
-
-    
-
-
 
 
     }
