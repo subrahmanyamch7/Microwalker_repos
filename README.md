@@ -1,4 +1,4 @@
-**#This is for the microwalker paper "Magneto-acoustically responsive microwalker for cell manipulation**
+**#This is for the "Bio-inspired biped microwalker with magneto-acoustic actuation for cell manipulation" paper #**
 
 # Magnetoacoustic Microrobotic Manipulation System
 This system is a magnetic and acoustic microrobotic manipulation device. Its intention is to be a user friendly, portable, micro-robotic
